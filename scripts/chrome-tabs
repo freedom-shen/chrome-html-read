@@ -1,0 +1,86 @@
+#!/bin/bash
+# chrome-tabs — 列出 Chrome 所有窗口和 tab
+# 用法:
+#   chrome-tabs              列出所有 tab(标题 + URL,带编号)
+#   chrome-tabs --urls      只列出 URL
+#   chrome-tabs --json      输出 JSON(便于程序解析)
+#   chrome-tabs "<关键字>"   按 URL/标题模糊过滤
+#
+# 依赖: macOS + Google Chrome,且需开启:
+#   Chrome 菜单 → 查看 → 开发者 → 允许 Apple 事件中的 JavaScript
+# (列出 tab 本身不需要 JS,但读取内容需要,所以建议一并开启)
+
+set -euo pipefail
+
+FILTER=""
+JSON=0
+URLS_ONLY=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON=1 ;;
+    --urls) URLS_ONLY=1 ;;
+    -h|--help)
+      sed -n '2,12p' "$0"
+      exit 0
+      ;;
+    *) FILTER="$arg" ;;
+  esac
+done
+
+if [ "$JSON" -eq 1 ]; then
+  osascript -ss -e '
+  tell application "Google Chrome"
+    set js to "["
+    set firstTab to true
+    repeat with w in windows
+      set winIdx to 0
+      repeat with i from 1 to count of windows
+        if item i of windows is w then set winIdx to i
+      end repeat
+      set tabIdx to 0
+      repeat with t in tabs of w
+        set tabIdx to tabIdx + 1
+        if firstTab then
+          set firstTab to false
+        else
+          set js to js & ","
+        end if
+        set js to js & "{\"win\":" & winIdx & ",\"tab\":" & tabIdx & ",\"url\":\"" & (URL of t) & "\",\"title\":\"" & (title of t) & "\"}"
+      end repeat
+    end repeat
+    set js to js & "]"
+    return js
+  end tell' 2>/dev/null
+  exit 0
+fi
+
+OUTPUT=$(osascript -e '
+tell application "Google Chrome"
+  set output to ""
+  set winIdx to 0
+  repeat with w in windows
+    set winIdx to winIdx + 1
+    set tabIdx to 0
+    repeat with t in tabs of w
+      set tabIdx to tabIdx + 1
+      set output to output & "[" & winIdx & "." & tabIdx & "]\t" & (title of t) & "\t" & (URL of t) & "\n"
+    end repeat
+  end repeat
+  return output
+end tell' 2>/dev/null)
+
+if [ -z "$OUTPUT" ]; then
+  echo "未检测到 Chrome 窗口,或 Chrome 未运行" >&2
+  exit 1
+fi
+
+if [ -n "$FILTER" ]; then
+  OUTPUT=$(printf '%s' "$OUTPUT" | grep -i -- "$FILTER" || true)
+fi
+
+if [ "$URLS_ONLY" -eq 1 ]; then
+  printf '%s\n' "$OUTPUT" | awk -F'\t' '{print $3}'
+else
+  printf '%s\n' "$OUTPUT" | awk -F'\t' '{ printf "%s  %s\n    %s\n", $1, $2, $3 }'
+fi

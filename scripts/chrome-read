@@ -1,0 +1,134 @@
+#!/bin/bash
+# chrome-read — 读取 Chrome 当前打开的某个 tab 的内容
+# 用法:
+#   chrome-read 2.3                读第 2 窗口第 3 tab 的正文(innerText)
+#   chrome-read browser-use        按关键字模糊匹配 URL/标题,读第一个命中的
+#   chrome-read 2.3 html           输出完整 outerHTML
+#   chrome-read 2.3 --copy         读取并复制到剪贴板
+#   chrome-read 2.3 --max 8000     截断到 8000 字符(喂给 LLM 时防止 token 爆炸)
+#
+# 依赖: macOS + Google Chrome,且需开启:
+#   Chrome 菜单 → 查看 → 开发者 → 允许 Apple 事件中的 JavaScript
+#
+# 常见错误:
+#   "通过 AppleScript 执行 JavaScript 的功能已关闭"
+#     → 按上面路径开启该开关(一次性设置)
+#   "未找到包含 X 的 tab"
+#     → 关键字没匹配上,先用 chrome-tabs 看清单
+
+set -euo pipefail
+
+TARGET=""
+MODE="text"          # text | html
+COPY=0
+MAX_CHARS=""
+
+# 解析参数
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      sed -n '2,18p' "$0"
+      exit 0
+      ;;
+    html) MODE="html" ;;
+    text) MODE="text" ;;
+    --copy|-c) COPY=1 ;;
+    --max) MAX_CHARS="$2"; shift ;;
+    --max=*) MAX_CHARS="${1#--max=}" ;;
+    *) [ -z "$TARGET" ] && TARGET="$1" || { echo "未知参数: $1" >&2; exit 1; } ;;
+  esac
+  shift
+done
+
+if [ -z "$TARGET" ]; then
+  sed -n '2,12p' "$0"
+  exit 1
+fi
+
+# 构建 JS —— 关键: 全程单引号,不含任何双引号,避免 AppleScript 字符串冲突
+if [ "$MODE" = "html" ]; then
+  READ_JS='document.documentElement.outerHTML'
+else
+  # 克隆 DOM、剔除噪音节点、返回可见正文
+  READ_JS='(function(){var c=document.cloneNode(true);var s=['\''script'\'','\''style'\'','\''noscript'\'','\''svg'\'','\''link'\'','\''template'\'','\''iframe'\''];for(var i=0;i<s.length;i++){var ns=c.querySelectorAll(s[i]);for(var j=0;j<ns.length;j++){ns[j].parentNode.removeChild(ns[j]);}}return c.body?c.body.innerText:document.body.innerText;})()'
+fi
+
+# 截断逻辑:在 JS 层做,避免传输巨大字符串
+if [ -n "$MAX_CHARS" ]; then
+  if [ "$MODE" = "html" ]; then
+    READ_JS="${READ_JS}.substring(0,${MAX_CHARS})"
+  else
+    # 重新包裹:先取正文再截断
+    READ_JS='(function(){var r='${READ_JS}';return r.length>'${MAX_CHARS}'?r.substring(0,'${MAX_CHARS}')+'\''...[截断 '${MAX_CHARS}' 字符]\'':r;})()'
+  fi
+fi
+
+read_by_index() {
+  local win="$1" tab="$2"
+  osascript <<APPLESCRIPT
+tell application "Google Chrome"
+  try
+    return execute (tab ${tab} of window ${WIN}) javascript "${READ_JS}"
+  on error errMsg
+    return "ERROR: " & errMsg
+  end try
+end tell
+APPLESCRIPT
+}
+
+read_by_keyword() {
+  local kw="$1"
+  osascript <<APPLESCRIPT
+tell application "Google Chrome"
+  set hitWin to 0
+  set hitTab to 0
+  set winIdx to 0
+  repeat with w in windows
+    set winIdx to winIdx + 1
+    set tabIdx to 0
+    repeat with t in tabs of w
+      set tabIdx to tabIdx + 1
+      if (URL of t) contains "${kw}" or (title of t) contains "${kw}" then
+        set hitWin to winIdx
+        set hitTab to tabIdx
+        exit repeat
+      end if
+    end repeat
+    if hitWin > 0 then exit repeat
+  end repeat
+  if hitWin is 0 then
+    return "NOTFOUND: 没有包含「${kw}」的 tab"
+  end if
+  set t to tab hitTab of window hitWin
+  set theURL to URL of t
+  set theTitle to title of t
+  set theContent to execute t javascript "${READ_JS}"
+  return "📌 " & theTitle & linefeed & theURL & linefeed & linefeed & theContent
+end tell
+APPLESCRIPT
+}
+
+# 调度
+if [[ "$TARGET" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  WIN="${TARGET%%.*}"
+  TAB="${TARGET##*.}"
+  RESULT=$(read_by_index "$WIN" "$TAB")
+else
+  RESULT=$(read_by_keyword "$TARGET")
+fi
+
+# 错误处理
+case "$RESULT" in
+  ERROR:*|NOTFOUND:*)
+    echo "$RESULT" >&2
+    exit 1
+    ;;
+esac
+
+# 输出
+if [ "$COPY" -eq 1 ]; then
+  printf '%s' "$RESULT" | pbcopy
+  echo "✅ 已复制 $(printf '%s' "$RESULT" | wc -c | tr -d ' ') 字节到剪贴板"
+else
+  printf '%s\n' "$RESULT"
+fi

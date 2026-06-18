@@ -1,0 +1,95 @@
+#!/bin/bash
+# chrome-search — 在 Chrome 所有已打开的 tab 中搜索关键字
+# 用法:
+#   chrome-search "登录"
+#   chrome-search "Tuya" --max 500    每个命中 tab 只显示前 500 字符上下文
+#   chrome-search "error" --urls      只输出命中的 URL 列表
+#
+# 原理: 遍历每个 tab,在 DOM innerText 里 grep 关键字,带上下文返回。
+# 依赖 chrome-tabs 的逻辑,同样需要开启 "允许 Apple 事件中的 JavaScript"。
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  sed -n '2,8p' "$0"
+  exit 1
+fi
+
+KEYWORD=""
+MAX_CTX=400
+URLS_ONLY=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --max) MAX_CTX="$2"; shift ;;
+    --urls) URLS_ONLY=1 ;;
+    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    *) KEYWORD="$1" ;;
+  esac
+  shift
+done
+
+if [ -z "$KEYWORD" ]; then
+  echo "请提供搜索关键字" >&2
+  exit 1
+fi
+
+# 列出所有 tab:win.tab<TAB>title<TAB>url
+TABS=$(osascript -e '
+tell application "Google Chrome"
+  set output to ""
+  set winIdx to 0
+  repeat with w in windows
+    set winIdx to winIdx + 1
+    set tabIdx to 0
+    repeat with t in tabs of w
+      set tabIdx to tabIdx + 1
+      set output to output & winIdx & "." & tabIdx & "\t" & (title of t) & "\t" & (URL of t) & "\n"
+    end repeat
+  end repeat
+  return output
+end tell' 2>/dev/null || true)
+
+if [ -z "$TABS" ]; then
+  echo "未检测到 Chrome 窗口" >&2
+  exit 1
+fi
+
+HIT_COUNT=0
+
+while IFS=$'\t' read -r IDX TITLE URL; do
+  [ -z "$IDX" ] && continue
+  # 对每个 tab 执行 JS,看是否包含关键字,并截取上下文
+  CONTENT=$(osascript <<APPLESCRIPT 2>/dev/null || true
+tell application "Google Chrome"
+  try
+    set t to tab (${IDX#*.}) of window (${IDX%%.*})
+    execute t javascript "(function(){var t=document.body?document.body.innerText:'';var k='${KEYWORD}';var i=t.toLowerCase().indexOf(k.toLowerCase());if(i<0){return '';}var s=Math.max(0,i-200);var e=Math.min(t.length,i+${MAX_CTX});return '...' + t.substring(s,e).replace(/\\s+/g,' ') + '...';})()"
+  on error
+    return ""
+  end try
+end tell
+APPLESCRIPT
+)
+  if [ -n "$CONTENT" ] && [ "$CONTENT" != "" ]; then
+    HIT_COUNT=$((HIT_COUNT + 1))
+    if [ "$URLS_ONLY" -eq 1 ]; then
+      echo "$URL"
+    else
+      echo "──────────────────────────────────────────"
+      echo "📌 [$IDX] $TITLE"
+      echo "   $URL"
+      echo "   💬 $CONTENT"
+    fi
+  fi
+done <<< "$TABS"
+
+if [ "$HIT_COUNT" -eq 0 ]; then
+  echo "🔍 在所有已打开的 tab 中未找到「${KEYWORD}」" >&2
+  exit 1
+fi
+
+if [ "$URLS_ONLY" -ne 1 ]; then
+  echo ""
+  echo "✅ 共在 ${HIT_COUNT} 个 tab 中找到「${KEYWORD}」"
+fi
