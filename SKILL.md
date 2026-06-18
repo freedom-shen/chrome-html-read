@@ -1,6 +1,6 @@
 ---
 name: chrome-html-read
-description: Use when the user asks to read, summarize, or extract content from a webpage they currently have open in Chrome, list their open tabs, or search across open tabs. Also use when the user references "the page I have open", "my current tab", "看看我打开的网页", "读取浏览器内容", or wants to feed live browser content into the conversation.
+description: 当用户要求读取、总结或提取其 Chrome 浏览器中已打开网页的内容、列出已打开的标签页、或在已打开的标签页中搜索时使用。也适用于用户提到"看看我打开的网页""读一下我现在开的这个页面""我浏览器里那个 tab""读取浏览器内容""list my open tabs""the page I have open""my current tab",或希望把浏览器中的实时内容喂给对话的场景。
 ---
 
 # chrome-html-read
