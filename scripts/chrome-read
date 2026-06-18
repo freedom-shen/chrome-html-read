@@ -2,10 +2,12 @@
 # chrome-read — 读取 Chrome 当前打开的某个 tab 的内容
 # 用法:
 #   chrome-read 2.3                读第 2 窗口第 3 tab 的正文(innerText)
+#                                  默认去掉 script/style/svg/link 等噪音,并截断到 8000 字符
 #   chrome-read browser-use        按关键字模糊匹配 URL/标题,读第一个命中的
 #   chrome-read 2.3 html           输出完整 outerHTML
 #   chrome-read 2.3 --copy         读取并复制到剪贴板
-#   chrome-read 2.3 --max 8000     截断到 8000 字符(喂给 LLM 时防止 token 爆炸)
+#   chrome-read 2.3 --max 8000     截断到 8000 字符(默认值,喂给 LLM 时防 token 爆炸)
+#   chrome-read 2.3 --max 0        不截断,返回完整正文
 #
 # 依赖: macOS + Google Chrome,且需开启:
 #   Chrome 菜单 → 查看 → 开发者 → 允许 Apple 事件中的 JavaScript
@@ -21,7 +23,9 @@ set -euo pipefail
 TARGET=""
 MODE="text"          # text | html
 COPY=0
-MAX_CHARS=""
+# 默认截断:网页正文动辄几十 KB,不截会污染调用方(尤其是 LLM agent)的上下文。
+# 用户显式传 --max N 会覆盖此默认;传 --max 0 表示不截断。
+MAX_CHARS="8000"
 
 # 解析参数
 while [ $# -gt 0 ]; do
@@ -55,11 +59,14 @@ fi
 
 # 截断逻辑:在 JS 层做,避免传输巨大字符串
 if [ -n "$MAX_CHARS" ]; then
-  if [ "$MODE" = "html" ]; then
-    READ_JS="${READ_JS}.substring(0,${MAX_CHARS})"
-  else
-    # 重新包裹:先取正文再截断
-    READ_JS='(function(){var r='${READ_JS}';return r.length>'${MAX_CHARS}'?r.substring(0,'${MAX_CHARS}')+'\''...[截断 '${MAX_CHARS}' 字符]\'':r;})()'
+  # --max 0 表示不截断(完整返回)
+  if [ "${MAX_CHARS:-0}" != "0" ]; then
+    if [ "$MODE" = "html" ]; then
+      READ_JS="${READ_JS}.substring(0,${MAX_CHARS})"
+    else
+      # 重新包裹:先取正文再截断
+      READ_JS='(function(){var r='${READ_JS}';return r.length>'${MAX_CHARS}'?r.substring(0,'${MAX_CHARS}')+'\''...[截断 '${MAX_CHARS}' 字符]\'':r;})()'
+    fi
   fi
 fi
 
