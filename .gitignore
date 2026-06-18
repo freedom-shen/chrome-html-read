@@ -1,3 +1,7 @@
 .DS_Store
 *.log
 .tmp/
+
+# Ferry CLI 本地产物(发布时自动生成,不入版本控制)
+.ferryignore
+.ferry/
