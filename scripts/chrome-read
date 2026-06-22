@@ -58,15 +58,15 @@ else
 fi
 
 # 截断逻辑:在 JS 层做,避免传输巨大字符串
+# 重要:只能用「在表达式末尾追加 .slice()/.substring()」的方式截断,
+# 不要把表达式再包进带单/双引号的字符串里 —— 注入 AppleScript 的双引号串中
+# 嵌入单引号转义极易写错(历史 bug:闭合单引号被吃成反斜杠,导致 --max 必崩)。
 if [ -n "$MAX_CHARS" ]; then
   # --max 0 表示不截断(完整返回)
   if [ "${MAX_CHARS:-0}" != "0" ]; then
-    if [ "$MODE" = "html" ]; then
-      READ_JS="${READ_JS}.substring(0,${MAX_CHARS})"
-    else
-      # 重新包裹:先取正文再截断
-      READ_JS='(function(){var r='${READ_JS}';return r.length>'${MAX_CHARS}'?r.substring(0,'${MAX_CHARS}')+'\''...[截断 '${MAX_CHARS}' 字符]\'':r;})()'
-    fi
+    # base 表达式都返回字符串:html 是 outerHTML,text 是 IIFE 返回的 innerText。
+    # 包一层括号再切片即可,不引入任何额外引号。
+    READ_JS="(${READ_JS}).slice(0,${MAX_CHARS})"
   fi
 fi
 
